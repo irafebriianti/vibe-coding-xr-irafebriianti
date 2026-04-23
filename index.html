@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>CSSD AR Trainer | XR Blocks</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
+          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
+          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
+          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
+          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
+          "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/addons/",
+          "@google/genai": "https://cdn.jsdelivr.net/npm/@google/genai/+esm"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <script type="module">
+      import 'xrblocks/addons/simulator/SimulatorAddons.js';
+      import * as THREE from 'three';
+      import * as xb from 'xrblocks';
+
+      const apiKey = ""; // Gemini API Key will be auto-populated by Canvas
+
+      /**
+       * CSSD Training App
+       * An AR spatial application for training hospital staff on surgical instrument 
+       * identification and sterilization workflows.
+       */
+      class CSSDTrainingApp extends xb.Script {
+        constructor() {
+          super();
+          this.isProcessing = false;
+        }
+
+        init() {
+          this.ai = xb.core.ai;
+          this.deviceCamera = xb.core.deviceCamera;
+          
+          // Basic lighting for the AR scene
+          this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+
+          this.createDashboard();
+
+          // Load the camera feed into our UI video view
+          if (this.deviceCamera) {
+            this.videoView.load(this.deviceCamera);
+          }
+        }
+
+        /**
+         * Builds the Spatial UI Dashboard for the Trainee.
+         */
+        createDashboard() {
+          // Main Container Panel
+          this.panel = new xb.SpatialPanel({
+            width: 3.8,
+            height: 2.2,
+            backgroundColor: '#0f172aa0', // Slate 900 with transparency
+            showEdge: true
+          });
+          
+          // Place the dashboard comfortably in front of the user
+          this.panel.position.set(0, 1.5, -2.2);
+          this.add(this.panel);
+
+          const grid = this.panel.addGrid();
+
+          // 1. Header Row
+          const headerRow = grid.addRow({weight: 0.12});
+          headerRow.addText({
+            text: '🏥 CSSD Sterilization Workflow Trainer',
+            fontColor: '#38bdf8', // Light blue
+            fontSize: 0.09
+          });
+
+          // 2. Content Row
+          const contentRow = grid.addRow({weight: 0.76});
+
+          // 2a. Left Column (Camera Feed & Action Buttons)
+          const leftCol = contentRow.addCol({weight: 0.45});
+          
+          const videoRow = leftCol.addRow({weight: 0.7});
+          this.videoView = new xb.VideoView({ 
+            width: 1.5, 
+            height: 1.1, 
+            mode: 'cover' 
+          });
+          videoRow.add(this.videoView);
+
+          const btnRow = leftCol.addRow({weight: 0.3});
+          
+          // Scan Button
+          this.scanBtn = btnRow.addCol({weight: 0.5}).addTextButton({
+            text: '🔍 Scan Instrument',
+            backgroundColor: '#2563eb', // Blue 600
+            fontColor: '#ffffff',
+            fontSize: 0.07,
+            margin: 0.02
+          });
+          this.scanBtn.onTriggered = () => this.scanInstrument();
+
+          // Quiz Button
+          this.quizBtn = btnRow.addCol({weight: 0.5}).addTextButton({
+            text: '📝 Workflow Quiz',
+            backgroundColor: '#059669', // Emerald 600
+            fontColor: '#ffffff',
+            fontSize: 0.07,
+            margin: 0.02
+          });
+          this.quizBtn.onTriggered = () => this.startQuiz();
+
+          // 2b. Right Column (Results & Knowledge Base)
+          const rightCol = contentRow.addCol({weight: 0.55});
+          
+          const resultPanel = rightCol.addRow({weight: 1.0}).addPanel({
+            backgroundColor: '#1e293b88' // Slate 800 transparent
+          });
+          
+          this.resultDisplay = new xb.ScrollingTroikaTextView({
+            text: 'Welcome, Trainee!\n\n1. Point the camera at a surgical instrument.\n2. Tap "Scan Instrument".\n\nThe AI will verify the instrument, display its matching sets, and guide you through the correct sterilization workflow (Autoclave, ETO, Plasma, etc.).\n\nTap "Workflow Quiz" to test your knowledge!',
+            fontSize: 0.045,
+            textAlign: 'left'
+          });
+          resultPanel.addGrid().addRow({weight: 1.0}).add(this.resultDisplay);
+
+          // 3. Footer Row (Status updates)
+          const footerRow = grid.addRow({weight: 0.12});
+          this.statusText = footerRow.addText({
+            text: 'Status: Ready to Scan',
+            fontColor: '#cbd5e1', // Slate 300
+            fontSize: 0.05
+          });
+          
+          this.panel.updateLayouts();
+        }
+
+        /**
+         * Captures camera feed, sends it to Gemini, and displays CSSD workflows.
+         */
+        async scanInstrument() {
+          if (this.isProcessing || !this.ai?.isAvailable()) {
+            this.statusText.setText('Status: AI Unavailable or Busy');
+            return;
+          }
+
+          this.isProcessing = true;
+          this.statusText.setText('Status: Analyzing instrument details...');
+          this.resultDisplay.setText('Scanning...\nRunning computer vision identification...');
+
+          try {
+            const snapshot = this.deviceCamera.getSnapshot({outputFormat: 'base64'});
+            if (!snapshot) throw new Error('No camera feed available. Please allow camera permissions.');
+
+            const {strippedBase64, mimeType} = xb.parseBase64DataURL(snapshot);
+            const image = {inlineData: {mimeType: mimeType, data: strippedBase64}};
+
+            const prompt = `You are an expert CSSD (Central Sterile Supply Department) trainer. 
+            Analyze the surgical instrument in this image. Provide a highly structured training breakdown in Markdown:
+
+            **Name:** [Common Name] (*[Medical Term]*)
+            **Function:** [Brief description of what it is used for in surgery]
+            
+            --- WORKFLOW ---
+            **Method:** [Sterilization Method e.g., Steam Autoclave, ETO, Hydrogen Peroxide Plasma]
+            **Parameters:** [Recommended Temp & Duration, e.g., 134°C for 3.5 mins]
+            **Pairing:** [What surgical set does this belong to? e.g., General Surgery Basic Tray]
+            **Path:** [Decon -> Prep -> Sterilization -> Storage/OR]
+            
+            --- ⚠️ CRITICAL WARNINGS ---
+            [Provide strict error prevention warnings. e.g., If heat-sensitive, strongly highlight DO NOT AUTOCLAVE. Highlight handling risks.]
+            
+            If no instrument is clearly visible, politely ask the user to bring the tool closer to the camera.`;
+
+            const response = await this.ai.query({
+              type: 'multiPart',
+              parts: [image, {text: prompt}],
+            });
+
+            this.resultDisplay.setText(response.text);
+            this.statusText.setText('Status: Analysis Complete');
+          } catch (error) {
+            this.resultDisplay.setText(`Error: ${error.message}`);
+            this.statusText.setText('Status: Error reading instrument');
+          } finally {
+            this.isProcessing = false;
+          }
+        }
+
+        /**
+         * Generates a dynamic learning quiz on CSSD protocols.
+         */
+        async startQuiz() {
+          if (this.isProcessing || !this.ai?.isAvailable()) return;
+          
+          this.isProcessing = true;
+          this.statusText.setText('Status: Generating Training Scenario...');
+          this.resultDisplay.setText('Preparing a CSSD workflow scenario...');
+
+          try {
+            const prompt = `You are a CSSD training AI. Generate a short, interactive multiple-choice quiz question about surgical instrument sterilization workflows or identification.
+            
+            Make it practical (e.g., choosing the right sterilization method for an endoscope or dealing with a soiled Kelly forceps).
+            
+            Format:
+            **Scenario:** [The scenario]
+            **Question:** [The question]
+            
+            A) [Option 1]
+            B) [Option 2]
+            C) [Option 3]
+            
+            --- (Scroll down for answer) ---
+            
+            
+            
+            
+            
+            
+            **Correct Answer:** [Letter and explanation of why, focusing on CSSD safety protocols]`;
+
+            const response = await this.ai.query({
+              type: 'multiPart',
+              parts: [{text: prompt}],
+            });
+
+            this.resultDisplay.setText(response.text);
+            this.statusText.setText('Status: Quiz Ready - Scroll down for answers');
+          } catch(error) {
+            this.resultDisplay.setText(`Error: ${error.message}`);
+            this.statusText.setText('Status: Error generating quiz');
+          } finally {
+            this.isProcessing = false;
+          }
+        }
+      }
+
+      // App Initialization
+      function start() {
+        try {
+          const options = new xb.Options();
+          
+          // Enable UI and AI systems
+          options.enableUI();
+          
+          // Request Environment (Back) camera for scanning objects
+          options.enableCamera('environment'); 
+          
+          options.enableAI();
+          // Bind the API key for Gemini execution
+          options.ai.apiKey = apiKey; 
+
+          options.setAppTitle('CSSD AR Trainer');
+
+          xb.init(options);
+          xb.add(new CSSDTrainingApp());
+        } catch (error) {
+          console.error('Failed to initialize XR app:', error);
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', start);
+    </script>
+  </body>
+</html>
